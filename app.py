@@ -1,37 +1,40 @@
 import pandas as pd
 from flask import Flask, jsonify, request
+import gc
 
 # Initialize the Flask application
 app = Flask(__name__)
 
 # Load the dataset globally
-# We don't set index here because we need to search the 'title' column
 try:
-    df = pd.read_csv('Poster_df_final.csv')
+    # OPTIMIZATION: Only load the columns we actually need to save memory
+    cols_to_keep = ['imdb_id', 'title', 'cast', 'poster_path']
     
-    # Convert NaN values to None (null) so JSON serialization works correctly
-    # and ensure columns are string type for searching
-    df = df.where(pd.notnull(df), None)
+    df = pd.read_csv('Poster_df_final.csv', usecols=cols_to_keep)
+    
+    # Ensure title is string for searching
     df['title'] = df['title'].astype(str)
     
+    # Fill NaN values with empty strings or a placeholder to avoid JSON errors later
+    # This is more memory efficient than converting the whole DF to object via .where
+    df.fillna('', inplace=True)
+    
+    # Manually run garbage collection to free up setup memory
+    gc.collect()
+    
 except FileNotFoundError:
-    print("Error: Poster_df_final.csv not found. Please make sure the CSV file is in the same directory.")
+    print("Error: Poster_df_final.csv not found.")
     df = pd.DataFrame(columns=['imdb_id', 'title', 'cast', 'poster_path'])
 
 @app.route('/search_movie', methods=['GET'])
 def search_movie():
-    """
-    Takes a 'title' query parameter, searches the dataframe,
-    and returns the top 8 matching results with full details.
-    """
-    # Get the search query from parameters
+    # Get the search query
     query = request.args.get('title')
 
     if not query:
         return jsonify({"error": "Title parameter is required"}), 400
 
     # Perform case-insensitive string search
-    # na=False ensures we don't crash on missing titles
     matches = df[df['title'].str.contains(query, case=False, na=False)]
 
     # Get top 8 results
@@ -39,13 +42,12 @@ def search_movie():
 
     output_list = []
 
-    # Iterate through the results to format them
     for _, row in top_results.iterrows():
         poster_path = row['poster_path']
         full_poster_url = None
         
-        # Construct full URL if path exists
-        if poster_path:
+        # Check if poster_path is not empty string (since we filled NaNs with '')
+        if poster_path and poster_path != '':
             full_poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}"
 
         output_list.append({
@@ -58,5 +60,4 @@ def search_movie():
     return jsonify(output_list)
 
 if __name__ == '__main__':
-    # This runs on port 5000 for local testing
     app.run(host='0.0.0.0', port=5000, debug=True)
